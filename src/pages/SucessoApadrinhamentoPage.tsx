@@ -1,0 +1,181 @@
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { CheckCircle, Heart, Home, Users, Mail } from "lucide-react";
+import { motion } from "framer-motion";
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
+import { Button } from "../components/ui/button";
+import { HashService } from "../services/HashService";
+import { AnalyticsService } from "../services/AnalyticsService";
+
+export default function SucessoApadrinhamentoPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [isValidHash, setIsValidHash] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [transactionData, setTransactionData] = useState<any>(null);
+
+  const hash = searchParams.get('hash');
+  const type = searchParams.get('type');
+
+  useEffect(() => {
+    document.title = "Apadrinhamento Realizado com Sucesso - ChildFund Brasil";
+    
+    // Validar hash
+    if (!hash) {
+      navigate('/');
+      return;
+    }
+
+    // Validar hash usando HashService
+    const validateHash = async () => {
+      try {
+        const isValid = await HashService.validateTransactionHash(hash);
+        
+        if (isValid) {
+          setIsValidHash(true);
+          
+          // Obter dados da transação
+          const data = HashService.getTransactionData(hash);
+          setTransactionData(data);
+          
+          // Disparar eventos de analytics apenas para pagamentos
+          if (type === 'payment' && data) {
+            AnalyticsService.trackDonationSuccess({
+              transactionId: data.transactionId || hash,
+              donationType: data.donationType,
+              amount: data.amount,
+              paymentMethod: data.paymentMethod || 'unknown',
+              childId: data.childId
+            });
+          }
+        } else {
+          console.log('Hash inválido ou expirado');
+          navigate('/');
+        }
+      } catch (error) {
+        console.error('Erro ao validar hash:', error);
+        navigate('/');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    validateHash();
+  }, [hash, type, navigate]);
+
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+      </div>
+    );
+  }
+
+  if (!isValidHash) {
+    return null;
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Navbar />
+      
+      <motion.main 
+        className="flex-grow bg-gradient-to-b from-blue-50 to-white"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6 }}
+      >
+        <div className="container mx-auto px-4 py-16">
+          <div className="max-w-2xl mx-auto text-center">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
+              className="mb-8"
+            >
+              <CheckCircle className="h-24 w-24 text-green-500 mx-auto mb-6" />
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+            >
+              <h1 className="text-4xl font-bold text-gray-900 mb-4">
+                Apadrinhamento Realizado com Sucesso!
+              </h1>
+              
+              <p className="text-xl text-gray-600 mb-8">
+                Parabéns! Você se tornou padrinho/madrinha e mudará para sempre a vida de uma criança.
+              </p>
+
+              <div className="bg-white rounded-lg shadow-lg p-8 mb-8">
+                <div className="flex items-center justify-center mb-4">
+                  <Heart className="h-8 w-8 text-red-500 mr-3" />
+                  <h2 className="text-2xl font-semibold text-gray-900">
+                    Bem-vindo(a) à Família ChildFund!
+                  </h2>
+                </div>
+                
+                <p className="text-gray-600 mb-6">
+                  Seu apadrinhamento mensal de R$ {transactionData?.amount?.toFixed(2) || '74,00'} proporcionará acesso à educação, saúde, 
+                  proteção e desenvolvimento para {transactionData?.childName || 'uma criança'} em situação de vulnerabilidade.
+                </p>
+
+                <div className="grid md:grid-cols-2 gap-4 mb-6">
+                  <div className="bg-blue-50 rounded-lg p-4">
+                    <Users className="h-6 w-6 text-blue-600 mb-2 mx-auto" />
+                    <h3 className="font-semibold text-blue-800 mb-1">Área do Padrinho</h3>
+                    <p className="text-blue-700 text-sm">
+                      Acesse sua área exclusiva para acompanhar o desenvolvimento da criança
+                    </p>
+                  </div>
+                  
+                  <div className="bg-green-50 rounded-lg p-4">
+                    <Mail className="h-6 w-6 text-green-600 mb-2 mx-auto" />
+                    <h3 className="font-semibold text-green-800 mb-1">Correspondência</h3>
+                    <p className="text-green-700 text-sm">
+                      Em breve você poderá trocar cartas com sua criança apadrinhada
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-yellow-50 rounded-lg p-4">
+                  <p className="text-yellow-800 text-sm">
+                    <strong>Próximos passos:</strong> Você receberá um e-mail com as informações 
+                    da criança apadrinhada e instruções para acessar sua área do padrinho.
+                    <br />
+                    <span className="font-mono mt-2 block">Transação: {hash?.substring(0, 16)}...</span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <Button 
+                  onClick={() => navigate('/dashboard')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3"
+                >
+                  <Users className="mr-2 h-5 w-5" />
+                  Acessar Área do Padrinho
+                </Button>
+                
+                <Button 
+                  onClick={() => navigate('/')}
+                  variant="outline"
+                  className="border-blue-600 text-blue-600 hover:bg-blue-50 px-8 py-3"
+                >
+                  <Home className="mr-2 h-5 w-5" />
+                  Voltar ao Início
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        </div>
+      </motion.main>
+      
+      <Footer />
+    </div>
+  );
+}

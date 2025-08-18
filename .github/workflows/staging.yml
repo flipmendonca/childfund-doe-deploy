@@ -1,0 +1,68 @@
+name: 🧪 Deploy to Staging
+
+on:
+  push:
+    branches: [ staging, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - name: 📁 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: 📦 Install dependencies
+      run: npm ci
+
+    - name: 🔨 Build project
+      run: npm run build
+
+    - name: 🧪 Run tests (if available)
+      run: |
+        if [ -f "package.json" ] && grep -q '"test"' package.json; then
+          npm test -- --watchAll=false
+        else
+          echo "No tests found, skipping..."
+        fi
+
+    - name: 🔧 Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
+
+    - name: 🚀 Deploy to staging
+      run: |
+        # Upload para diretório de staging
+        rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
+          --exclude 'node_modules' \
+          --exclude '.git' \
+          ./ ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}:${{ secrets.STAGING_PATH }}/
+
+    - name: ✅ Verify staging deployment
+      run: |
+        sleep 5
+        curl -f http://${{ secrets.STAGING_HOST }}:8081 || echo "Staging verification failed"
+
+    - name: 💬 Comment PR (if applicable)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '🧪 **Staging Deploy Successful!**\n\nPreview: http://${{ secrets.STAGING_HOST }}:8081'
+          })

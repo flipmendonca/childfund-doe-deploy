@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste reCAPTCHA - ChildFund</title>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+</head>
+<body>
+    <div style="max-width: 600px; margin: 50px auto; padding: 20px; font-family: Arial, sans-serif;">
+        <h1>Teste reCAPTCHA - ChildFund Brasil</h1>
+        
+        <p><strong>Site Key:</strong> 6Let-18rAAAAAHy8_2FW1uTf5bm4k91oX3tJdvYK</p>
+        <p><strong>Status:</strong> <span id="status">Aguardando verificação...</span></p>
+        
+        <div style="margin: 20px 0;">
+            <div class="g-recaptcha" 
+                 data-sitekey="6Let-18rAAAAAHy8_2FW1uTf5bm4k91oX3tJdvYK"
+                 data-callback="onRecaptchaSuccess"
+                 data-expired-callback="onRecaptchaExpired">
+            </div>
+        </div>
+        
+        <button id="submitBtn" disabled style="padding: 10px 20px; font-size: 16px; background: #ccc; border: none; border-radius: 4px;">
+            Finalizar (Complete o reCAPTCHA)
+        </button>
+    </div>
+
+    <script>
+        function onRecaptchaSuccess(token) {
+            console.log('reCAPTCHA token:', token);
+            document.getElementById('status').innerHTML = '<span style="color: green;">✅ Verificado com sucesso!</span>';
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = false;
+            btn.style.background = '#4CAF50';
+            btn.style.color = 'white';
+            btn.textContent = 'Finalizar Doação';
+        }
+        
+        function onRecaptchaExpired() {
+            console.log('reCAPTCHA expirado');
+            document.getElementById('status').innerHTML = '<span style="color: red;">❌ Verificação expirada</span>';
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.style.background = '#ccc';
+            btn.style.color = 'black';
+            btn.textContent = 'Complete o reCAPTCHA';
+        }
+    </script>
+</body>
+</html> 
