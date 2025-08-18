@@ -64,6 +64,7 @@ export default {
 				'childfund-orange-light': '#FFF4E6',
 				'childfund-light-green': '#3CC387',
 				'childfund-blue': '#1E40AF',
+				'childfund-soft-white': '#F6F3EF',
 				destructive: {
 					DEFAULT: 'hsl(var(--destructive))',
 					foreground: 'hsl(var(--destructive-foreground))'
