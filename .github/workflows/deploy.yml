@@ -35,24 +35,17 @@ jobs:
 
     - name: 🚀 Deploy to server
       run: |
-        # Criar backup do deploy anterior
+        # Criar backup do deploy anterior dentro do diretório do projeto
         ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-          "cd /var/www && if [ -d doe.childfundbrasil.org.br ]; then cp -r doe.childfundbrasil.org.br doe.childfundbrasil.org.br.backup.$(date +%Y%m%d_%H%M%S); fi"
+          "cd ${{ secrets.DEPLOY_PATH }} && if [ -d dist ]; then mv dist dist.backup.$(date +%Y%m%d_%H%M%S); fi"
         
-        # Upload dos arquivos
+        # Upload dos arquivos da build
         rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
-          --exclude 'node_modules' \
-          --exclude '.git' \
-          --exclude '.env' \
-          ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}/
+          ./dist/ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}/dist/
         
-        # Instalar dependências no servidor (se necessário)
+        # Verificar se os arquivos foram enviados corretamente
         ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-          "cd ${{ secrets.DEPLOY_PATH }} && if [ -f package.json ]; then npm ci --production; fi"
-        
-        # Reiniciar serviços se necessário
-        ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-          "sudo systemctl reload nginx"
+          "cd ${{ secrets.DEPLOY_PATH }}/dist && ls -la"
 
     - name: ✅ Verify deployment
       run: |
