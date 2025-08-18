@@ -62,7 +62,7 @@ export default function ComoApoiarPage() {
               >
                 <div className="flex flex-col gap-0 flex-1 justify-center lg:justify-end">
                   <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold mb-4 sm:mb-6 leading-tight text-white break-words hyphens-auto">
-                Transforme uma <span className="text-childfund-yellow">vida</span> 🚀
+                Transforme uma <span className="text-childfund-yellow">vida</span>
               </h1>
               <p className="text-base sm:text-lg md:text-xl lg:text-2xl max-w-xl leading-relaxed opacity-95 mb-6 sm:mb-8 break-words">
                 Cada criança tem uma história única e sonhos para o futuro. Seja parte dessa jornada de transformação.
