@@ -22,6 +22,7 @@ export default {
 			fontFamily: {
 				'sans': ['Montserrat', 'sans-serif'],
 				'montserrat': ['Montserrat', 'sans-serif'],
+				'roboto-slab': ['"Roboto Slab"', 'serif'],
 			},
 			fontWeight: {
 				'light': '300',
