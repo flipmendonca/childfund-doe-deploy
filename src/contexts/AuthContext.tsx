@@ -34,6 +34,8 @@ export interface User {
   }>;
   isMockUser?: boolean; // Flag para identificar usuários mockados
   isDSOUser?: boolean; // Flag para identificar usuários do DSO
+  dynamicsId?: string; // ID do contato no Dynamics 365
+  contactId?: string; // Alias para dynamicsId
 }
 
 /**
@@ -201,7 +203,10 @@ function convertDSOUserToUser(profileData: ProfileData): User {
     deficiency: sanitizeUTF8((profileData as any).deficiency), // Novo campo
     createdAt: profileData.created_at || new Date().toISOString(),
     isDSOUser: true,
-    isMockUser: false
+    isMockUser: false,
+    // Campos específicos do Dynamics
+    dynamicsId: sanitizeUTF8((profileData as any).dynamicsId),
+    contactId: sanitizeUTF8((profileData as any).dynamicsId) // Alias
   };
   
   // Debug específico dos campos de endereço
@@ -558,6 +563,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       createdAt: userData.created_at || new Date().toISOString(),
       isMockUser: false,
       isDSOUser: true, // Marcar como usuário DSO
+      // Campos específicos do Dynamics
+      dynamicsId: userData.dynamicsId,
+      contactId: userData.dynamicsId // Alias
     };
     
     // ⚠️ DEBUG: Log específico do mapeamento realizado
@@ -572,6 +580,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     console.log('  - zipCode:', mappedUser.zipCode, '(de userData.cep:', userData.cep, ')');
     console.log('  - birthDate:', mappedUser.birthDate, '(de userData.birthDate:', userData.birthDate, ')');
     console.log('  - gender:', mappedUser.gender, '(de userData.gender:', userData.gender, ')');
+    console.log('  - dynamicsId:', mappedUser.dynamicsId, '(de userData.dynamicsId:', userData.dynamicsId, ')');
     console.groupEnd();
 
     return mappedUser;
@@ -767,35 +776,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.log('🔍 [AuthContext] Fazendo login DSO (padrão produção)...');
         
         try {
-          const { login: dsoLogin } = await import('../utils/dso/session/login');
-          const { profile } = await import('../utils/dso/session/profile');
+          // Usar nosso endpoint de login DSO que já obtém o dynamicsId
+          console.log('🔍 [AuthContext] Usando endpoint de login DSO integrado...');
           
-          const HOST = 'https://dso.childfundbrasil.org.br/';
-          const KEY = 'c5e53b87-d315-427d-a9f0-1d80d5f65f56';
+          const loginResponse = await fetch('http://localhost:3000/api/dso/login', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              login: cleanDocument,  // Corrigido: servidor espera 'login', não 'cpf'
+              password: password
+            })
+          });
+
+          if (!loginResponse.ok) {
+            throw new Error(`Erro HTTP: ${loginResponse.status}`);
+          }
+
+          const loginResult = await loginResponse.json();
+          console.log('📡 [AuthContext] Resultado do login DSO integrado:', loginResult);
           
-          // Login exato como na produção
-          const loginResult = await dsoLogin(HOST, {
-            login: cleanDocument, // CPF sem formatação
-            password: password
-          }, KEY);
-          
-          console.log('📡 [AuthContext] Resultado do login DSO:', loginResult);
-          
-          if (loginResult.success === 'authenticated') {
-            console.log('✅ [AuthContext] Login DSO bem-sucedido');
+          if (loginResult.success) {
+            console.log('✅ [AuthContext] Login DSO integrado bem-sucedido');
+            console.log('👤 [AuthContext] Dados do perfil com dynamicsId:', loginResult.data);
             
-            // Buscar dados completos do perfil
-            const profileResult = await profile(HOST);
-            console.log('👤 [AuthContext] Dados do perfil:', profileResult);
-            
-            if (profileResult.data && Object.keys(profileResult.data).length > 0) {
-              // Verificar se tem dados válidos (não é objeto vazio)
-              const profileData = profileResult.data as any; // Type assertion para contornar verificação
+            if (loginResult.data?.profile) {
+              // Verificar se tem dados válidos
+              const profileData = loginResult.data.profile;
+              const dynamicsId = loginResult.data.dynamicsId;
+              
+              console.log('🎯 [AuthContext] dynamicsId obtido:', dynamicsId);
               
               // Criar usuário com dados completos
               const userData: User = {
                 id: profileData.id || loginResult.data?.user_id?.toString() || 'unknown',
-                name: profileData.name || loginResult.data?.name || 'Usuário',
+                name: profileData.name || 'Usuário',
                 email: profileData.email || '',
                 cpf: profileData.document || cleanDocument,
                 donorType: "single",
@@ -814,7 +830,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 deficiency: (profileData as any).deficiency || '', // Novo campo
                 createdAt: profileData.created_at || new Date().toISOString(),
                 isMockUser: false,
-                isDSOUser: true
+                isDSOUser: true,
+                // Campos específicos do Dynamics
+                dynamicsId: dynamicsId,
+                contactId: dynamicsId // Alias
               };
               
               setUser(userData);
@@ -837,7 +856,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               console.warn('⚠️ [AuthContext] Dados de perfil não disponíveis');
             }
           } else {
-            console.log('⚠️ [AuthContext] Login DSO falhou:', loginResult.message);
+            console.log('⚠️ [AuthContext] Login DSO integrado falhou:', loginResult.error || loginResult.message);
           }
         } catch (dsoError) {
           console.log('⚠️ [AuthContext] Erro no login DSO:', dsoError);

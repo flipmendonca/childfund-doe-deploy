@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Heart, Users, Calendar, Gift, MapPin, Clock, Sparkles, Star, CreditCard, HelpCircle, User, TrendingUp, Mail, MailOpen, Settings, AlertTriangle } from "lucide-react";
+import { ArrowRight, Heart, Users, Calendar, Gift, MapPin, Clock, Sparkles, Star, CreditCard, HelpCircle, User, TrendingUp, Mail, MailOpen, Settings, AlertTriangle, Loader2 } from "lucide-react";
+import { testPaymentMethodsWithDSOLogin } from '../../utils/testDSOLogin';
+import { useToast } from '@/hooks/use-toast';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -18,46 +20,273 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const donorData = useDonorData();
   const [activeView, setActiveView] = useState<ViewType>("padrinho");
+  
+  // Estados para carregar dados reais
+  const [isLoadingRealData, setIsLoadingRealData] = useState(false);
+  const [realInvoicesData, setRealInvoicesData] = useState<any>(null);
+  const [realDataError, setRealDataError] = useState<string | null>(null);
+  
+  const { toast } = useToast();
+
+  // Função para categorizar dados das faturas/doações (igual à DonationsPage)
+  const categorizeInvoiceData = (invoicesArray: any[]) => {
+    console.log('🔍 [categorizeInvoiceData] Estrutura dos dados recebidos:', {
+      isArray: Array.isArray(invoicesArray),
+      length: invoicesArray?.length || 0,
+      firstItem: invoicesArray?.[0] || null
+    });
+
+    const categorized = {
+      sponsorships: 0,
+      monthlyDonations: 0,
+      singleDonations: 0,
+      totalValue: 0,
+      activePlans: 0,
+      totalSingleDonationsValue: 0,
+      totalMonthlyValue: 0
+    };
+
+    // Processar array de faturas diretamente (como na DonationsPage)
+    if (Array.isArray(invoicesArray)) {
+      invoicesArray.forEach((invoice: any) => {
+        const invoiceType = determineInvoiceType(invoice);
+        const amount = invoice.totalamount || 0;
+        
+        categorized.totalValue += amount;
+        
+        switch (invoiceType) {
+          case 'sponsorship':
+            categorized.sponsorships++;
+            break;
+          case 'monthly':
+            categorized.monthlyDonations++;
+            categorized.totalMonthlyValue += amount;
+            break;
+          case 'once':
+            categorized.singleDonations++;
+            categorized.totalSingleDonationsValue += amount;
+            break;
+        }
+      });
+    }
+
+    return categorized;
+  };
+
+  // Função para determinar o tipo de uma fatura específica
+  const determineInvoiceType = (invoice: any): 'monthly' | 'once' | 'sponsorship' => {
+    if (invoice.invoice_details && invoice.invoice_details.length > 0) {
+      const productName = invoice.invoice_details[0].productname?.toLowerCase() || '';
+      const invoiceDetailName = invoice.invoice_details[0].invoicedetailname?.toLowerCase() || '';
+      
+      // Apadrinhamento
+      if (productName.includes('apadrinhamento') || invoiceDetailName.includes('apadrinhamento') ||
+          productName.includes('sponsorship') || invoiceDetailName.includes('sponsorship')) {
+        return 'sponsorship';
+      }
+      
+      // Doação Regular (Guardião)
+      if (productName.includes('regular') || productName.includes('doação regular') || 
+          invoiceDetailName.includes('regular') || invoiceDetailName.includes('doação regular') ||
+          productName.includes('mensal') || productName.includes('recorrente') ||
+          productName.includes('guardian') || productName.includes('guardião') ||
+          invoiceDetailName.includes('mensal') || invoiceDetailName.includes('recorrente') ||
+          invoiceDetailName.includes('guardian') || invoiceDetailName.includes('guardião')) {
+        return 'monthly';
+      }
+    }
+    
+    // Padrão: Doação Única
+    return 'once';
+  };
+
+  // Função para carregar dados reais usando o mesmo fluxo que funciona em test-payment-methods
+  const loadRealDashboardData = async () => {
+    if (!user) return;
+
+    setIsLoadingRealData(true);
+    setRealDataError(null);
+
+    try {
+      console.log('🔍 [Dashboard] Carregando dados reais para:', user.email);
+      
+      // Verificar se temos as credenciais necessárias
+      const userCpf = user.cpf || user.document;
+      console.log('🔍 [Dashboard] Dados do usuário:', {
+        email: user.email,
+        dynamicsId: user.dynamicsId,
+        contactId: user.contactId,
+        cpf: userCpf,
+        hasCredentials: !!userCpf
+      });
+
+      let contactId = user.dynamicsId || user.contactId;
+      
+      if (!contactId) {
+        console.warn('⚠️ [Dashboard] ContactId não disponível no usuário. Usuário pode precisar fazer login novamente.');
+        throw new Error('ContactId não disponível. Faça login novamente para atualizar seus dados.');
+      }
+
+      console.log('🎯 [Dashboard] Usando contactId:', contactId);
+
+      // Usar endpoint direto que já funciona
+      // Testar conectividade com o servidor
+      console.log('🔄 [Dashboard] Testando conectividade com servidor...');
+      try {
+        // Primeiro, testar um endpoint simples para verificar se o servidor está rodando
+        const testResponse = await fetch('http://localhost:3000/api/test', { method: 'GET' });
+        console.log('🏥 [Dashboard] Teste de conectividade:', testResponse.status);
+        if (!testResponse.ok) {
+          throw new Error(`Servidor respondeu com status ${testResponse.status}`);
+        }
+      } catch (healthError) {
+        console.error('💀 [Dashboard] Servidor não está respondendo:', healthError);
+        throw new Error(`Servidor local não está acessível: ${healthError.message}`);
+      }
+
+      const endpointUrl = `http://localhost:3000/api/dynamics/direct-data/${contactId}`;
+      console.log('🔄 [Dashboard] Fazendo requisição para:', endpointUrl);
+      
+      const response = await fetch(endpointUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('📡 [Dashboard] Status da resposta:', response.status, response.statusText);
+      
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+        }
+        console.error('❌ [Dashboard] Erro na requisição:', errorData);
+        console.error('❌ [Dashboard] URL que falhou:', endpointUrl);
+        throw new Error(errorData.error || `Erro ${response.status}: ${response.statusText}`);
+      }
+
+      const directData = await response.json();
+      console.log('✅ [Dashboard] Dados diretos carregados:', {
+        success: directData.success,
+        hasData: !!directData.data,
+        dataKeys: directData.data ? Object.keys(directData.data) : null,
+        dataStructure: directData
+      });
+      
+      if (directData.success && directData.data) {
+        console.log('✅ [Dashboard] Dados recebidos do endpoint direto:', {
+          success: directData.success,
+          hasData: !!directData.data,
+          hasInvoices: !!directData.data.invoices,
+          hasInvoicesAll: !!directData.data.invoices?.all,
+          invoicesAllLength: directData.data.invoices?.all?.length || 0,
+          hasCategories: !!directData.data.invoices?.categories,
+          activePlans: directData.data.invoices?.categories?.activePlans?.length || 0,
+          donationHistory: directData.data.invoices?.categories?.donationHistory?.length || 0
+        });
+
+        // Extrair dados do endpoint direct-data
+        let invoicesArray = [];
+        
+        // O endpoint direct-data retorna a estrutura: data.invoices.all
+        if (directData.data.invoices && directData.data.invoices.all && Array.isArray(directData.data.invoices.all)) {
+          invoicesArray = directData.data.invoices.all;
+          console.log('✅ [Dashboard] Usando data.invoices.all:', invoicesArray.length, 'faturas');
+        } else if (Array.isArray(directData.data.invoices)) {
+          // Fallback: se for array direto
+          invoicesArray = directData.data.invoices;
+          console.log('✅ [Dashboard] Usando data.invoices como array:', invoicesArray.length, 'faturas');
+        } else {
+          console.error('❌ [Dashboard] Estrutura de dados não reconhecida:', directData.data.invoices);
+        }
+        
+        console.log('🔍 [Dashboard] Faturas processadas:', {
+          originalType: typeof directData.data.invoices,
+          processedArray: invoicesArray,
+          arrayLength: invoicesArray.length,
+          firstItem: invoicesArray[0] || null
+        });
+
+        // Salvar array processado
+        setRealInvoicesData(invoicesArray);
+        
+        // Determinar a aba ativa baseada nos dados reais
+        const categorizedData = categorizeInvoiceData(invoicesArray);
+        
+        console.log('📊 Dashboard categorizado:', categorizedData);
+        
+        // Priorizar: Apadrinhamento > Guardião > Único > Padrão
+        if (categorizedData.sponsorships > 0) {
+          setActiveView("padrinho");
+          console.log('📍 [Dashboard] Definindo aba: PADRINHO (apadrinhamentos encontrados)');
+        } else if (categorizedData.monthlyDonations > 0) {
+          setActiveView("guardiao");
+          console.log('📍 [Dashboard] Definindo aba: GUARDIÃO (doações mensais encontradas)');
+        } else if (categorizedData.singleDonations > 0) {
+          setActiveView("unico");
+          console.log('📍 [Dashboard] Definindo aba: ÚNICO (doações únicas encontradas)');
+        } else {
+          setActiveView("padrinho");
+          console.log('📍 [Dashboard] Definindo aba: PADRINHO (padrão - sem dados)');
+        }
+      } else {
+        throw new Error(directData.error || 'Dados não encontrados');
+      }
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      
+      setRealDataError(errorMessage);
+      
+      console.error('❌ [Dashboard] Erro ao carregar dados reais:', error);
+      
+      toast({
+        title: "Erro ao carregar dashboard",
+        description: errorMessage,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoadingRealData(false);
+    }
+  };
 
   useEffect(() => {
     // Check if user is authenticated
     if (!isLoading && !user) {
       navigate("/auth/login");
+      return;
     }
     
     // Set page title
     document.title = "Área do Doador - ChildFund Brasil";
     
-    // Set initial view based on user profile - always prioritize user's main profile
-    if (donorData?.profile) {
+    // Set initial view based on user profile ONLY if no real data has been loaded yet
+    if (donorData?.profile && !realInvoicesData) {
       setActiveView(donorData.profile);
-      console.log(`[Dashboard] Setting active view to: ${donorData.profile}`);
+      console.log(`[Dashboard] Setting initial view to: ${donorData.profile} (from donorData)`);
     }
   }, [user, isLoading, navigate, donorData]);
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-childfund-green"></div>
-      </div>
-    );
+  // Carregar dados quando o usuário estiver autenticado
+  useEffect(() => {
+    if (user && !isLoading && !realInvoicesData && !isLoadingRealData && !isMockMode) {
+      console.log('🔄 [Dashboard] Usuário autenticado, carregando dados...');
+      loadRealDashboardData();
+    }
+  }, [user, isLoading, isMockMode]);
+
+  // Redirect to login if not authenticated
+  if (!isLoading && !user) {
+    navigate("/auth/login");
+    return null;
   }
 
-  // Loading state durante troca de usuário ou carregamento inicial
-  if (isLoading || !user || !donorData) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-childfund-green to-childfund-blue flex items-center justify-center">
-        <div className="text-center text-white">
-          <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-white mx-auto mb-4"></div>
-          <h2 className="text-xl font-semibold mb-2">
-            {isLoading ? 'Carregando sua área...' : 'Preparando dados do usuário...'}
-          </h2>
-          <p className="text-white/80">
-            {isLoading ? 'Aguarde enquanto carregamos suas informações' : 'Sincronizando dados...'}
-          </p>
-        </div>
-      </div>
-    );
+  // Show nothing while loading to avoid flash
+  if (isLoading || !donorData) {
+    return null;
   }
 
   const formatCurrency = (amount: number) => {
@@ -71,10 +300,85 @@ export default function DashboardPage() {
     return new Date(dateString).toLocaleDateString('pt-BR');
   };
 
-  // Usar dados reais do doador
-  const realSponsorships = (donorData as any).sponsorships || [];
-  const realDonations = donorData.donations || [];
+  // Obter dados consolidados das faturas/doações reais
+  const getConsolidatedData = () => {
+    console.log('🔍 [getConsolidatedData] Estado atual:', {
+      hasRealInvoicesData: !!realInvoicesData,
+      realInvoicesDataType: typeof realInvoicesData,
+      isArray: Array.isArray(realInvoicesData),
+      length: realInvoicesData?.length || 0,
+      donorDataDonations: donorData?.donations?.length || 0
+    });
+
+    if (!realInvoicesData || !Array.isArray(realInvoicesData) || realInvoicesData.length === 0) {
+      // Se não temos dados reais, calcular baseado nos dados do donorData (se existirem)
+      console.log('⚠️ [getConsolidatedData] Sem dados reais, calculando do donorData');
+      
+      const fallbackDonations = donorData?.donations || [];
+      let fallbackSponsorships = 0;
+      let fallbackMonthly = 0; 
+      let fallbackSingle = 0;
+      let fallbackTotalValue = 0;
+      let fallbackSingleValue = 0;
+      let fallbackMonthlyValue = 0;
+      
+      // SEM dados mockados - usar apenas dados reais do donorData se existirem
+      if (fallbackDonations.length > 0) {
+        fallbackSingle = fallbackDonations.length;
+        fallbackSingleValue = fallbackDonations.reduce((sum, donation) => sum + (donation.amount || 0), 0);
+      }
+      
+      // Não adicionar dados fictícios - se não tiver dados reais, mostrar 0
+      console.log('🔍 [Dashboard] Fallback baseado apenas em dados reais do donorData:', {
+        profile: donorData?.profile,
+        realDonationsCount: fallbackDonations.length,
+        realDonationsValue: fallbackSingleValue
+      });
+      
+      fallbackTotalValue = fallbackSingleValue + fallbackMonthlyValue;
+      
+      return {
+        sponsorships: (donorData as any).sponsorships || [],
+        monthlyDonations: [],
+        singleDonations: fallbackDonations,
+        totalValue: fallbackTotalValue,
+        activePlans: fallbackMonthly,
+        categorized: {
+          sponsorships: fallbackSponsorships,
+          monthlyDonations: fallbackMonthly,
+          singleDonations: fallbackSingle,
+          totalValue: fallbackTotalValue,
+          activePlans: fallbackMonthly,
+          totalSingleDonationsValue: fallbackSingleValue,
+          totalMonthlyValue: fallbackMonthlyValue
+        }
+      };
+    }
+
+    const categorizedData = categorizeInvoiceData(realInvoicesData);
+    console.log('✅ [getConsolidatedData] Dados categorizados:', categorizedData);
+    
+    return {
+      sponsorships: realInvoicesData.filter((inv: any) => determineInvoiceType(inv) === 'sponsorship'),
+      monthlyDonations: realInvoicesData.filter((inv: any) => determineInvoiceType(inv) === 'monthly'),
+      singleDonations: realInvoicesData.filter((inv: any) => determineInvoiceType(inv) === 'once'),
+      totalValue: categorizedData.totalValue,
+      activePlans: categorizedData.activePlans,
+      categorized: categorizedData
+    };
+  };
+
+  const consolidatedData = getConsolidatedData();
+  
+  // Dados para uso nas abas
+  const realSponsorships = consolidatedData.sponsorships;
+  const realDonations = consolidatedData.singleDonations;
   const realSponsoredChild = (donorData as any).sponsoredChild;
+  
+  // Totalizadores baseados nos dados reais
+  const totalDonated = consolidatedData.totalValue;
+  const activePlansCount = consolidatedData.activePlans;
+  const donationsCount = consolidatedData.categorized.singleDonations;
 
   const getAvailableTabs = () => {
     // Sempre mostrar todas as 3 abas, independente do histórico do usuário
@@ -84,13 +388,13 @@ export default function DashboardPage() {
   const availableTabs = getAvailableTabs();
 
   // Verificar se usuário tem apadrinhamentos ativos
-  const hasActiveSponsorships = realSponsorships && realSponsorships.length > 0;
+  const hasActiveSponsorships = consolidatedData.categorized.sponsorships > 0 || (realSponsorships && realSponsorships.length > 0);
   
   // Verificar se usuário tem doações mensais ativas (guardião)
-  const hasMonthlyDonations = donorData?.monthlyDonation?.status === 'active' || false;
+  const hasMonthlyDonations = consolidatedData.categorized.monthlyDonations > 0 || donorData?.monthlyDonation?.status === 'active' || activePlansCount > 0;
   
   // Verificar se usuário tem histórico de doações únicas
-  const hasOneTimeDonations = realDonations && realDonations.length > 0;
+  const hasOneTimeDonations = consolidatedData.categorized.singleDonations > 0 || (realDonations && realDonations.length > 0);
 
   // Renderizar avisos sobre funcionalidades não disponíveis
   const renderWarnings = () => {
@@ -269,306 +573,301 @@ export default function DashboardPage() {
     </div>
   );
 
-  const renderGuardiaoContent = () => (
-    <div className="space-y-6">
-      <Card className="border-childfund-green/20 shadow-lg hover:shadow-xl transition-all duration-300">
-        <CardContent className="p-6">
-          <div className="text-center mb-6">
-            <h3 className="text-lg font-semibold text-gray-600 mb-2">Total em Programas Comunitários</h3>
-            {donorData.monthlyDonation ? (
+  const renderGuardiaoContent = () => {
+    // Usar dados já processados
+    const monthlyDonationsData = consolidatedData.monthlyDonations;
+    const hasRealMonthlyData = consolidatedData.categorized.monthlyDonations > 0;
+    const totalMonthlyAmount = consolidatedData.categorized.totalMonthlyValue;
+    
+    console.log('🔍 [Dashboard Guardião] Dados processados:', {
+      count: consolidatedData.categorized.monthlyDonations,
+      totalValue: totalMonthlyAmount,
+      hasData: hasRealMonthlyData,
+      invoicesArray: Array.isArray(realInvoicesData),
+      invoicesLength: realInvoicesData?.length || 0
+    });
+
+    return (
+      <div className="space-y-6">
+        <Card className="border-childfund-green/20 shadow-lg hover:shadow-xl transition-all duration-300">
+          <CardContent className="p-6">
+            {hasRealMonthlyData ? (
               <>
-                <p className="text-4xl font-bold text-childfund-orange mb-2">
-                  {formatCurrency(donorData.monthlyDonation.amount)}
-                </p>
-                <p className="text-gray-600">
-                  Você contribui para programas comunitários mensalmente.
-                </p>
-              </>
-            ) : (
-              <>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-3">
-                  <p className="text-blue-800 font-medium mb-1">Histórico em desenvolvimento</p>
-                  <p className="text-blue-700 text-sm">
-                    Se você tem contribuições ativas, elas continuam funcionando normalmente. 
-                    O histórico detalhado será disponibilizado em breve.
+                {/* Header com impacto valorizado */}
+                <div className="text-center mb-6">
+                  <div className="flex items-center justify-center gap-3 mb-4">
+                    <div className="w-12 h-12 bg-gradient-to-br from-childfund-green to-childfund-blue rounded-full flex items-center justify-center">
+                      <Star className="text-white" size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-childfund-green">Guardião da Infância</h3>
+                      <p className="text-sm text-gray-600">Transformando vidas todos os meses</p>
+                    </div>
+                  </div>
+                  
+                  {/* Estatísticas principais */}
+                  <div className="grid grid-cols-2 gap-4 p-4 bg-gradient-to-r from-childfund-green/10 to-childfund-blue/10 rounded-lg">
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-childfund-green">
+                        {consolidatedData.categorized.monthlyDonations || activePlansCount}
+                      </p>
+                      <p className="text-sm font-medium text-gray-700">
+                        Plano{(consolidatedData.categorized.monthlyDonations || activePlansCount) > 1 ? 's' : ''} Ativo{(consolidatedData.categorized.monthlyDonations || activePlansCount) > 1 ? 's' : ''}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-childfund-blue">
+                        {totalMonthlyAmount > 0 ? formatCurrency(totalMonthlyAmount) : 'R$ 0,00'}
+                      </p>
+                      <p className="text-sm font-medium text-gray-700">Total Mensal</p>
+                    </div>
+                  </div>
+                  
+                  <p className="text-gray-600 mt-4 italic">
+                    "Sua constância constrói futuros. Cada mês você semeia esperança e colhe transformação."
                   </p>
                 </div>
-                <p className="text-gray-600">
-                  Você ainda não tem programas comunitários ativos.
-                </p>
-              </>
-            )}
-          </div>
-          
-          {/* Preview dos programas */}
-          <div className="space-y-4 mb-6">
-            {donorData.monthlyDonation ? (
-              <div className="flex items-center justify-between p-3 bg-childfund-green-light rounded-lg">
-                <div className="flex items-center gap-3">
-                  <Users className="text-childfund-green" size={20} />
-                  <div>
-                    <p className="font-medium text-childfund-green">Programa Comunitário</p>
-                    <p className="text-sm text-gray-600">Contribuição mensal ativa</p>
+
+                {/* Preview dos planos ativos */}
+                {monthlyDonationsData.length > 0 && (
+                  <div className="space-y-3 mb-6">
+                    <h4 className="font-semibold text-childfund-green flex items-center gap-2">
+                      <Calendar size={16} />
+                      Seus Planos Ativos
+                    </h4>
+                    {monthlyDonationsData.slice(0, 3).map((invoice: any, index: number) => (
+                      <div key={index} className="flex items-center justify-between p-3 bg-gradient-to-r from-white to-childfund-green-light/30 rounded-lg border border-childfund-green/10">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-childfund-green/20 rounded-full flex items-center justify-center">
+                            <Star className="text-childfund-green" size={14} />
+                          </div>
+                          <div>
+                            <p className="font-medium text-childfund-green">
+                              {invoice.invoice_details?.[0]?.productname || 'Guardião da Infância'}
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              Ativo desde {invoice.createdon ? formatDate(invoice.createdon) : 'Data não disponível'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-childfund-blue">
+                            {formatCurrency(invoice.totalamount || 0)}
+                          </p>
+                          <p className="text-xs text-gray-500">Muito obrigado! 🌟</p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
+                )}
+
+                {/* Impacto estimado */}
+                <div className="bg-gradient-to-r from-childfund-green/5 to-childfund-blue/5 p-4 rounded-lg mb-6">
+                  <h4 className="font-semibold text-childfund-green mb-2 flex items-center gap-2">
+                    <Users size={16} />
+                    Seu Impacto Contínuo
+                  </h4>
+                  <p className="text-sm text-gray-600">
+                    Com suas doações mensais, você está ajudando aproximadamente{' '}
+                    <span className="font-bold text-childfund-green">
+                      {Math.min(consolidatedData.categorized.monthlyDonations * 15, 200)} crianças
+                    </span>{' '}
+                    em programas educacionais, de saúde e desenvolvimento comunitário.
+                  </p>
                 </div>
-                <p className="font-bold text-childfund-orange">{formatCurrency(donorData.monthlyDonation.amount)}/mês</p>
-              </div>
+              </>
             ) : (
-              <div className="text-center py-8 text-gray-500">
-                <Users className="mx-auto mb-2" size={32} />
-                <p>Você ainda não tem programas comunitários ativos</p>
+              <div className="text-center py-12">
+                <div className="w-20 h-20 bg-gradient-to-br from-childfund-green/20 to-childfund-blue/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Star className="text-childfund-green" size={40} />
+                </div>
+                <h3 className="text-xl font-bold text-childfund-green mb-2">Torne-se um Guardião da Infância</h3>
+                <p className="text-gray-600 mb-6">
+                  Com uma doação mensal, você cria um impacto constante e transformador na vida de crianças e comunidades.
+                </p>
                 <Button 
                   onClick={() => navigate('/doacao-mensal')}
-                  className="mt-4 bg-childfund-green hover:bg-childfund-green/90"
+                  className="bg-gradient-to-r from-childfund-green to-childfund-blue hover:from-childfund-green/90 hover:to-childfund-blue/90 text-white font-bold px-8 py-3"
                 >
-                  Começar programa mensal
+                  <Star className="mr-2" size={18} />
+                  Começar Minha Jornada
                 </Button>
               </div>
             )}
-          </div>
-          
-          <div className="grid md:grid-cols-2 gap-3">
-            {hasMonthlyDonations ? (
-              <>
+            
+            {/* Ações */}
+            {hasRealMonthlyData && (
+              <div className="grid md:grid-cols-2 gap-3 pt-4 border-t border-gray-100">
                 <Button 
-                  onClick={() => navigate('/dashboard/reports')}
+                  onClick={() => navigate('/dashboard/donations')}
                   className="bg-childfund-green hover:bg-childfund-green/90 text-white font-bold"
                 >
-                  Relatórios de Impacto <ArrowRight className="ml-2" size={16} />
+                  <TrendingUp className="mr-2" size={16} />
+                  Ver Histórico Completo
                 </Button>
                 <Button 
-                  onClick={() => navigate('/relatorios/sustentabilidade')}
+                  onClick={() => navigate('/dashboard/payment')}
                   variant="outline"
                   className="border-childfund-green text-childfund-green hover:bg-childfund-green hover:text-white"
                 >
-                  Carta Comunitária
+                  <CreditCard className="mr-2" size={16} />
+                  Atualizar Pagamento
                 </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  };
+
+  const renderUnicoContent = () => {
+    // Usar dados já processados
+    const singleDonationsData = consolidatedData.singleDonations;
+    const hasRealSingleData = consolidatedData.categorized.singleDonations > 0;
+    const totalSingleValue = consolidatedData.categorized.totalSingleDonationsValue;
+    
+    console.log('🔍 [Dashboard Único] Dados processados:', {
+      count: consolidatedData.categorized.singleDonations,
+      totalValue: totalSingleValue,
+      hasData: hasRealSingleData,
+      invoicesArray: Array.isArray(realInvoicesData),
+      invoicesLength: realInvoicesData?.length || 0
+    });
+
+    return (
+      <div className="space-y-6">
+        <Card className="border-childfund-green/20 shadow-lg hover:shadow-xl transition-all duration-300">
+          <CardContent className="p-6">
+            {hasRealSingleData ? (
+              <>
+                {/* Header com impacto valorizado */}
+                <div className="text-center mb-6">
+                  <div className="flex items-center justify-center gap-3 mb-4">
+                    <div className="w-12 h-12 bg-gradient-to-br from-childfund-orange to-childfund-yellow rounded-full flex items-center justify-center">
+                      <Gift className="text-white" size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-childfund-green">Sua Generosidade em Ação</h3>
+                      <p className="text-sm text-gray-600">Doações pontuais que fazem a diferença</p>
+                    </div>
+                  </div>
+                  
+                  {/* Estatísticas principais */}
+                  <div className="grid grid-cols-2 gap-4 p-4 bg-gradient-to-r from-childfund-orange/10 to-childfund-yellow/20 rounded-lg">
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-childfund-orange">
+                        {consolidatedData.categorized.singleDonations}
+                      </p>
+                      <p className="text-sm font-medium text-gray-700">
+                        Doaç{consolidatedData.categorized.singleDonations > 1 ? 'ões' : 'ão'} Realizada{consolidatedData.categorized.singleDonations > 1 ? 's' : ''}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-bold text-childfund-green">
+                        {totalSingleValue > 0 ? formatCurrency(totalSingleValue) : 'R$ 0,00'}
+                      </p>
+                      <p className="text-sm font-medium text-gray-700">Total Doado</p>
+                    </div>
+                  </div>
+                  
+                  <p className="text-gray-600 mt-4 italic">
+                    "Cada doação sua planta uma semente de esperança que floresce em oportunidades reais."
+                  </p>
+                </div>
+
+                {/* Preview das doações mais recentes */}
+                {singleDonationsData.length > 0 && (
+                  <div className="space-y-3 mb-6">
+                    <h4 className="font-semibold text-childfund-green flex items-center gap-2">
+                      <Clock size={16} />
+                      Suas Contribuições Recentes
+                    </h4>
+                    {singleDonationsData.slice(0, 3).map((invoice: any, index: number) => (
+                      <div key={index} className="flex items-center justify-between p-3 bg-gradient-to-r from-white to-childfund-green-light/30 rounded-lg border border-childfund-green/10">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-childfund-orange/20 rounded-full flex items-center justify-center">
+                            <Gift className="text-childfund-orange" size={14} />
+                          </div>
+                          <div>
+                            <p className="font-medium text-childfund-green">
+                              {invoice.invoice_details?.[0]?.productname || 'Contribuição para o ChildFund'}
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              {invoice.createdon ? formatDate(invoice.createdon) : 'Data não disponível'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-childfund-orange">
+                            {formatCurrency(invoice.totalamount || 0)}
+                          </p>
+                          <p className="text-xs text-gray-500">Obrigado! 💚</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             ) : (
-              <>
+              <div className="text-center py-12">
+                <div className="w-20 h-20 bg-gradient-to-br from-childfund-orange/20 to-childfund-yellow/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Gift className="text-childfund-orange" size={40} />
+                </div>
+                <h3 className="text-xl font-bold text-childfund-green mb-2">Transforme Vidas com Sua Generosidade</h3>
+                <p className="text-gray-600 mb-6">
+                  Cada doação única é uma oportunidade de criar impacto imediato na vida de crianças e famílias.
+                </p>
                 <Button 
-                  onClick={() => navigate('/doacao-mensal')}
-                  className="bg-childfund-green hover:bg-childfund-green/90 text-white font-bold"
+                  onClick={() => navigate('/doacao-unica')}
+                  className="bg-gradient-to-r from-childfund-orange to-childfund-yellow hover:from-childfund-orange/90 hover:to-childfund-yellow/90 text-white font-bold px-8 py-3"
                 >
-                  <Star className="mr-2" size={16} />
-                  Começar doação mensal
+                  <Heart className="mr-2" size={18} />
+                  Fazer Minha Primeira Doação
+                </Button>
+              </div>
+            )}
+            
+            {/* Ações */}
+            {hasRealSingleData && (
+              <div className="grid md:grid-cols-2 gap-3 pt-4 border-t border-gray-100">
+                <Button 
+                  onClick={() => navigate('/doacao-unica')}
+                  className="bg-gradient-to-r from-childfund-orange to-childfund-yellow hover:from-childfund-orange/90 hover:to-childfund-yellow/90 text-white font-bold"
+                >
+                  <Gift className="mr-2" size={16} />
+                  Fazer Nova Doação
                 </Button>
                 <Button 
-                  onClick={() => navigate('/doacao-mensal')}
+                  onClick={() => navigate('/dashboard/donations')}
                   variant="outline"
                   className="border-childfund-green text-childfund-green hover:bg-childfund-green hover:text-white"
                 >
                   <TrendingUp className="mr-2" size={16} />
-                  Ver programas
-                </Button>
-              </>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderUnicoContent = () => (
-    <div className="space-y-6">
-      <Card className="border-childfund-green/20 shadow-lg hover:shadow-xl transition-all duration-300">
-        <CardContent className="p-6">
-          <div className="text-center mb-6">
-            <h3 className="text-lg font-semibold text-gray-600 mb-2">Total em Doações Únicas</h3>
-            {realDonations.length > 0 ? (
-              <>
-                <p className="text-4xl font-bold text-childfund-orange mb-2">
-                  {formatCurrency(totalDonated)}
-                </p>
-                <p className="text-gray-600">
-                  Você já fez {realDonations.length} {realDonations.length === 1 ? 'doação' : 'doações'} que transformam vidas.
-                </p>
-              </>
-            ) : (
-              <>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-3">
-                  <p className="text-blue-800 font-medium mb-1">Histórico em desenvolvimento</p>
-                  <p className="text-blue-700 text-sm">
-                    Se você já fez doações pelo site, elas foram processadas com sucesso. 
-                    O histórico detalhado será disponibilizado em breve.
-                  </p>
-                </div>
-                <p className="text-gray-600">
-                  Suas contribuições estão ativas e fazendo a diferença!
-                </p>
-              </>
-            )}
-          </div>
-          
-          {/* Preview das doações */}
-          <div className="space-y-4 mb-6">
-            {realDonations.length > 0 ? (
-              realDonations.slice(0, 3).map((donation, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-childfund-green-light rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <Gift className="text-childfund-green" size={20} />
-                    <div>
-                      <p className="font-medium text-childfund-green">{donation.description || 'Doação única'}</p>
-                      <p className="text-sm text-gray-600">{formatDate(donation.date)}</p>
-                    </div>
-                  </div>
-                  <p className="font-bold text-childfund-orange">{formatCurrency(donation.amount)}</p>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-8">
-                <Gift className="mx-auto mb-3 text-gray-400" size={32} />
-                <div className="mb-4">
-                  <p className="text-gray-600 mb-2">Histórico de doações em desenvolvimento</p>
-                  <p className="text-sm text-gray-500">
-                    Se você já fez doações pelo site, elas foram processadas com sucesso. 
-                    <br />O histórico detalhado será disponibilizado em breve.
-                  </p>
-                </div>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-                  <p className="text-blue-800 text-sm">
-                    <strong>Suas doações estão ativas!</strong> Esta funcionalidade está sendo desenvolvida para mostrar seu histórico completo.
-                  </p>
-                </div>
-                <Button 
-                  onClick={() => navigate('/doacao-unica')}
-                  className="bg-childfund-green hover:bg-childfund-green/90"
-                >
-                  Fazer nova doação
+                  Ver Histórico Completo
                 </Button>
               </div>
             )}
-          </div>
-          
-          <div className="grid md:grid-cols-2 gap-3">
-            <Button 
-              onClick={() => navigate('/doacao-unica')}
-              className="bg-childfund-yellow hover:bg-childfund-yellow/90 text-gray-800 font-bold"
-            >
-              <Gift className="mr-2" size={16} />
-              {hasOneTimeDonations ? 'Fazer nova doação' : 'Fazer primeira doação'}
-            </Button>
-            {hasOneTimeDonations && (
-              <Button 
-                onClick={() => navigate('/dashboard/donations')}
-                variant="outline"
-                className="border-childfund-green text-childfund-green hover:bg-childfund-green hover:text-white"
-              >
-                <TrendingUp className="mr-2" size={16} />
-                Ver histórico
-              </Button>
-            )}
-            {!hasOneTimeDonations && (
-              <Button 
-                onClick={() => navigate('/doacao-unica')}
-                variant="outline"
-                className="border-childfund-yellow text-gray-700 hover:bg-childfund-yellow hover:text-gray-800"
-              >
-                <Heart className="mr-2" size={16} />
-                Ver causas
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  };
 
-      {/* Incentivo ao apadrinhamento para doadores únicos */}
-      <Card className="border-childfund-green/30 shadow-lg bg-gradient-to-r from-childfund-green-light/20 to-white">
-        <CardHeader>
-          <CardTitle className="text-childfund-green flex items-center gap-2">
-            <Heart className="text-childfund-green" size={20} />
-            Que tal criar um vínculo especial?
-          </CardTitle>
-          <CardDescription>
-            Você já conhece a alegria de doar! Que tal dar o próximo passo e apadrinhar uma criança? 
-            Crie um laço único e acompanhe de perto a transformação que sua generosidade gera.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3 mb-4">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Users className="text-childfund-green" size={16} />
-              <span>Acompanhe o crescimento de uma criança</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Mail className="text-childfund-orange" size={16} />
-              <span>Troque cartas e crie memórias</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Sparkles className="text-childfund-yellow" size={16} />
-              <span>Veja seu impacto direto na vida de alguém</span>
-            </div>
-          </div>
-          <div className="grid md:grid-cols-2 gap-3">
-            <Button 
-              onClick={() => navigate('/apadrinhamento')}
-              className="bg-childfund-green hover:bg-childfund-green/90 text-white font-bold"
-            >
-              <Heart className="mr-2" size={16} />
-              Conhecer crianças
-            </Button>
-            <Button 
-              onClick={() => navigate('/doacao-unica')}
-              variant="outline"
-              className="border-childfund-orange text-childfund-orange hover:bg-childfund-orange hover:text-white font-bold"
-            >
-              <Gift className="mr-2" size={16} />
-              Fazer nova doação
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Componente "Espalhe mais esperança" para doações únicas */}
-      <Card className="border-childfund-orange/30 shadow-lg">
-        <CardHeader>
-          <CardTitle className="text-childfund-green">Espalhe mais esperança</CardTitle>
-          <CardDescription>
-            Suas doações únicas permitem ampliar pontualmente o trabalho do ChildFund, 
-            atendendo emergências e necessidades específicas das comunidades.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3 mb-4">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Sparkles className="text-childfund-yellow" size={16} />
-              <span>Resposta rápida a emergências</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Heart className="text-childfund-orange" size={16} />
-              <span>Apoio a projetos especiais</span>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Users className="text-childfund-green" size={16} />
-              <span>Impacto direto nas comunidades</span>
-            </div>
-          </div>
-          <Button 
-            onClick={() => navigate('/doacao-unica')}
-            className="w-full bg-childfund-orange hover:bg-childfund-orange/90 text-white font-bold"
-          >
-            <Gift className="mr-2" size={16} />
-            Fazer nova doação
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const totalDonated = Array.isArray(donorData.donations)
+  const finalTotalDonated = consolidatedData.totalValue > 0 ? consolidatedData.totalValue : (Array.isArray(donorData.donations)
     ? (donorData.donations as { amount: number }[]).reduce((sum, donation) => sum + (donation.amount || 0), 0)
-    : 0;
+    : 0);
   
-  // Estatísticas baseadas no perfil e se tem apadrinhamentos ativos
-  const childrenHelped = donorData.profile === "padrinho" && hasActiveSponsorships ? realSponsorships.length : 
-                         donorData.profile === "guardiao" && hasMonthlyDonations ? 135 : 0;
-  const communitiesImpacted = donorData.profile === "padrinho" && hasActiveSponsorships ? 1 : 
-                              donorData.profile === "guardiao" && hasMonthlyDonations ? 28 : 0; // 28 OSPs/municípios onde atuamos
+  // Estatísticas baseadas nos dados reais (não no perfil mockado)
+  const childrenHelped = hasActiveSponsorships ? (consolidatedData.categorized.sponsorships || realSponsorships.length) : 
+                         hasMonthlyDonations ? Math.min(consolidatedData.categorized.monthlyDonations * 15, 135) : // Estimativa: cada doação mensal impacta ~15 crianças
+                         hasOneTimeDonations ? Math.min(consolidatedData.categorized.singleDonations * 3, 50) : 0; // Estimativa: cada doação única impacta ~3 crianças
+  const communitiesImpacted = hasActiveSponsorships ? Math.min(consolidatedData.categorized.sponsorships, 5) : // Máximo 5 comunidades por apadrinhamento
+                              hasMonthlyDonations ? Math.min(Math.ceil(consolidatedData.categorized.monthlyDonations / 2), 28) : // Estimativa: cada 2 doações mensais = 1 comunidade
+                              hasOneTimeDonations ? Math.min(Math.ceil(consolidatedData.categorized.singleDonations / 5), 10) : 0; // Estimativa: cada 5 doações = 1 comunidade
 
-  // Determinar se deve mostrar estatísticas de impacto
-  const shouldShowImpactStats = (donorData.profile === "padrinho" && hasActiveSponsorships) ||
-                               (donorData.profile === "guardiao" && hasMonthlyDonations) ||
-                               (donorData.profile === "unico" && hasOneTimeDonations);
+  // Determinar se deve mostrar estatísticas de impacto baseado apenas em dados reais
+  const shouldShowImpactStats = hasActiveSponsorships || hasMonthlyDonations || hasOneTimeDonations;
 
   return (
     <LoggedLayout>
@@ -582,6 +881,46 @@ export default function DashboardPage() {
 
         {/* Avisos sobre funcionalidades não disponíveis */}
         {renderWarnings()}
+
+        {/* Loading indicator para dados reais */}
+        {isLoadingRealData && (
+          <Card className="border-blue-200 bg-blue-50">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                <div>
+                  <p className="font-medium text-blue-900">Carregando seus dados...</p>
+                  <p className="text-sm text-blue-700">Buscando histórico de doações e planos ativos</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Erro ao carregar dados reais */}
+        {realDataError && !isMockMode && (
+          <Card className="border-yellow-200 bg-yellow-50">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                  <div>
+                    <p className="font-medium text-yellow-900">Dados em modo de desenvolvimento</p>
+                    <p className="text-sm text-yellow-700">Usando dados de exemplo. Erro: {realDataError}</p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={loadRealDashboardData}
+                  className="border-yellow-300 text-yellow-700 hover:bg-yellow-100"
+                >
+                  Tentar novamente
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Welcome Section */}
         <Card className="border-childfund-green/20 shadow-lg">
@@ -631,10 +970,10 @@ export default function DashboardPage() {
                   </div>
                   <div className="text-[10px] md:text-xs opacity-80 text-center">
                     <span className="hidden sm:inline">
-                      {hasActiveSponsorships ? `${realSponsorships.length} criança${realSponsorships.length > 1 ? 's' : ''}` : 'Apadrinhar criança'}
+                      {hasActiveSponsorships ? `${consolidatedData.categorized.sponsorships || realSponsorships.length} apadrinhamento${(consolidatedData.categorized.sponsorships || realSponsorships.length) > 1 ? 's' : ''}` : 'Apadrinhar criança'}
                     </span>
                     <span className="sm:hidden">
-                      {hasActiveSponsorships ? `${realSponsorships.length} criança${realSponsorships.length > 1 ? 's' : ''}` : 'Apadrinhar'}
+                      {hasActiveSponsorships ? `${consolidatedData.categorized.sponsorships || realSponsorships.length} criança${(consolidatedData.categorized.sponsorships || realSponsorships.length) > 1 ? 's' : ''}` : 'Apadrinhar'}
                     </span>
                   </div>
                 </TabsTrigger>
@@ -648,10 +987,14 @@ export default function DashboardPage() {
                   </div>
                   <div className="text-[10px] md:text-xs opacity-80 text-center">
                     <span className="hidden sm:inline">
-                      {hasMonthlyDonations ? 'Doação mensal ativa' : 'Contribuição mensal'}
+                      {hasMonthlyDonations ? 
+                        (consolidatedData.categorized.monthlyDonations || activePlansCount) === 1 
+                          ? '1 doação mensal ativa' 
+                          : `${consolidatedData.categorized.monthlyDonations || activePlansCount} doações mensais ativas`
+                        : 'Contribuição mensal'}
                     </span>
                     <span className="sm:hidden">
-                      {hasMonthlyDonations ? 'Ativo' : 'Contribuir'}
+                      {hasMonthlyDonations ? `${consolidatedData.categorized.monthlyDonations || activePlansCount} ativa${(consolidatedData.categorized.monthlyDonations || activePlansCount) > 1 ? 's' : ''}` : 'Contribuir'}
                     </span>
                   </div>
                 </TabsTrigger>
@@ -665,10 +1008,14 @@ export default function DashboardPage() {
                   </div>
                   <div className="text-[10px] md:text-xs opacity-80 text-center">
                     <span className="hidden sm:inline">
-                      {hasOneTimeDonations ? `${realDonations.length} doação${realDonations.length > 1 ? 'ões' : ''}` : 'Fazer doação'}
+                      {hasOneTimeDonations ? 
+                        (consolidatedData.categorized.singleDonations || realDonations.length) === 1 
+                          ? '1 doação realizada' 
+                          : `${consolidatedData.categorized.singleDonations || realDonations.length} doações realizadas`
+                        : 'Fazer doação'}
                     </span>
                     <span className="sm:hidden">
-                      {hasOneTimeDonations ? `${realDonations.length} doaç${realDonations.length > 1 ? 'ões' : 'ão'}` : 'Doar'}
+                      {hasOneTimeDonations ? `${consolidatedData.categorized.singleDonations || realDonations.length} realizada${(consolidatedData.categorized.singleDonations || realDonations.length) > 1 ? 's' : ''}` : 'Doar'}
                     </span>
                   </div>
                 </TabsTrigger>
@@ -693,13 +1040,13 @@ export default function DashboardPage() {
         {shouldShowImpactStats && (
           <div className="grid md:grid-cols-3 gap-6">
             {/* Total investido - sempre mostra se tem doações */}
-            {totalDonated > 0 && (
+            {finalTotalDonated > 0 && (
               <Card className="border-childfund-green/20 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
                 <CardContent className="p-6 text-center">
                   <div className="mb-3">
                     <Heart className="text-childfund-orange mx-auto animate-pulse" size={32} />
                   </div>
-                  <p className="text-3xl font-bold text-childfund-green mb-2">{formatCurrency(totalDonated)}</p>
+                  <p className="text-3xl font-bold text-childfund-green mb-2">{formatCurrency(finalTotalDonated)}</p>
                   <p className="text-gray-600">Você já investiu em futuros brilhantes</p>
                 </CardContent>
               </Card>
@@ -714,7 +1061,9 @@ export default function DashboardPage() {
                   </div>
                   <p className="text-3xl font-bold text-childfund-orange mb-2">{childrenHelped}</p>
                   <p className="text-gray-600">
-                    {donorData.profile === "guardiao" ? "Crianças impactadas pelos programas" : "Criança(s) apadrinhada(s)"}
+                    {hasActiveSponsorships ? `Criança${childrenHelped > 1 ? 's' : ''} apadrinhada${childrenHelped > 1 ? 's' : ''}` : 
+                     hasMonthlyDonations ? "Crianças impactadas pelos programas" : 
+                     "Crianças impactadas pelas doações"}
                   </p>
                 </CardContent>
               </Card>
@@ -729,7 +1078,9 @@ export default function DashboardPage() {
                   </div>
                   <p className="text-3xl font-bold text-childfund-green mb-2">{communitiesImpacted}</p>
                   <p className="text-gray-600">
-                    {donorData.profile === "guardiao" ? "OSPs/Municípios onde atuamos" : `Comunidade${communitiesImpacted > 1 ? 's' : ''} impactada${communitiesImpacted > 1 ? 's' : ''}`}
+                    {hasActiveSponsorships ? `Comunidade${communitiesImpacted > 1 ? 's' : ''} com apadrinhamento${communitiesImpacted > 1 ? 's' : ''}` :
+                     hasMonthlyDonations ? "OSPs/Municípios onde atuamos" : 
+                     `Comunidade${communitiesImpacted > 1 ? 's' : ''} impactada${communitiesImpacted > 1 ? 's' : ''}`}
                   </p>
                 </CardContent>
               </Card>
